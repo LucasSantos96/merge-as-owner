@@ -1,0 +1,137 @@
+name: 'Merge As Owner'
+description: >-
+  Merge a pull request authenticated as a specific account (e.g. a project's
+  owner PAT) instead of the default github-actions[bot] identity, but only
+  when the PR's author is on an allow-list. Built for platforms like Vercel's
+  Hobby plan, which silently block deploys triggered by a merge commit that
+  isn't attributable to the project owner — this lets trusted collaborators'
+  PRs still reach main with a merge that "counts" as the owner's.
+author: 'LucasSantos96'
+branding:
+  icon: 'git-merge'
+  color: 'purple'
+
+inputs:
+  pr-number:
+    description: 'Number of the pull request to merge'
+    required: true
+  pr-author:
+    description: >-
+      GitHub username of the PR author, e.g. ${{ github.event.pull_request.user.login }}
+    required: true
+  allowed-authors:
+    description: >-
+      Comma or newline separated list of GitHub usernames whose PRs are
+      eligible for this merge. Case-insensitive. If pr-author is not in this
+      list, the action exits successfully without merging (outputs.merged
+      will be "false").
+    required: true
+  owner-token:
+    description: >-
+      Token used to perform the merge, e.g. a fine-grained PAT belonging to
+      the account whose identity the merge should be attributed to. Needs
+      "Contents: write" and "Pull requests: write" on the target repo. Do not
+      use the default GITHUB_TOKEN here — that defeats the purpose.
+    required: true
+  repository:
+    description: 'owner/repo to operate on'
+    required: false
+    default: ${{ github.repository }}
+  merge-method:
+    description: 'merge | squash | rebase'
+    required: false
+    default: 'merge'
+  commit-title:
+    description: 'Title for the merge commit (defaults to GitHub-generated title)'
+    required: false
+    default: ''
+  commit-message:
+    description: 'Extra detail for the merge commit message'
+    required: false
+    default: ''
+  wait-for-mergeable:
+    description: >-
+      GitHub computes PR mergeability asynchronously. Number of times to poll
+      the PR (2s apart) waiting for mergeable_state to resolve before giving
+      up and attempting the merge anyway.
+    required: false
+    default: '5'
+
+outputs:
+  merged:
+    description: '"true" if the merge was performed, "false" otherwise'
+    value: ${{ steps.merge.outputs.merged }}
+  reason:
+    description: 'Why nothing was merged, when merged=false (author-not-allowed | not-mergeable | api-error)'
+    value: ${{ steps.merge.outputs.reason }}
+  sha:
+    description: 'SHA of the resulting merge commit, when merged=true'
+    value: ${{ steps.merge.outputs.sha }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check author and merge
+      id: merge
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.owner-token }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        PR_AUTHOR: ${{ inputs.pr-author }}
+        ALLOWED_AUTHORS: ${{ inputs.allowed-authors }}
+        REPOSITORY: ${{ inputs.repository }}
+        MERGE_METHOD: ${{ inputs.merge-method }}
+        COMMIT_TITLE: ${{ inputs.commit-title }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        WAIT_FOR_MERGEABLE: ${{ inputs.wait-for-mergeable }}
+      run: |
+        set -euo pipefail
+
+        author_lower=$(echo "$PR_AUTHOR" | tr '[:upper:]' '[:lower:]' | xargs)
+        allowed=false
+        while IFS= read -r candidate; do
+          candidate=$(echo "$candidate" | tr '[:upper:]' '[:lower:]' | xargs)
+          [ -n "$candidate" ] && [ "$candidate" = "$author_lower" ] && allowed=true
+        done <<< "$(echo "$ALLOWED_AUTHORS" | tr ',' '\n')"
+
+        if [ "$allowed" != "true" ]; then
+          echo "::notice::PR #$PR_NUMBER author '$PR_AUTHOR' is not in allowed-authors — skipping merge"
+          echo "merged=false" >> "$GITHUB_OUTPUT"
+          echo "reason=author-not-allowed" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "::group::Waiting for mergeable_state"
+        state="unknown"
+        for i in $(seq 1 "$WAIT_FOR_MERGEABLE"); do
+          state=$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.mergeable_state' || echo "unknown")
+          echo "attempt $i: mergeable_state=$state"
+          [ "$state" != "unknown" ] && break
+          sleep 2
+        done
+        echo "::endgroup::"
+
+        if [ "$state" = "dirty" ] || [ "$state" = "blocked" ]; then
+          echo "::error::PR #$PR_NUMBER mergeable_state is '$state' — refusing to merge"
+          echo "merged=false" >> "$GITHUB_OUTPUT"
+          echo "reason=not-mergeable" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        echo "::group::Merging PR #$PR_NUMBER as owner ($MERGE_METHOD)"
+        args=(--repo "$REPOSITORY" "$PR_NUMBER" "--$MERGE_METHOD")
+        [ -n "$COMMIT_TITLE" ] && args+=(--subject "$COMMIT_TITLE")
+        [ -n "$COMMIT_MESSAGE" ] && args+=(--body "$COMMIT_MESSAGE")
+
+        if ! gh pr merge "${args[@]}"; then
+          echo "::error::gh pr merge failed for PR #$PR_NUMBER"
+          echo "merged=false" >> "$GITHUB_OUTPUT"
+          echo "reason=api-error" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+        echo "::endgroup::"
+
+        sha=$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.merge_commit_sha')
+        echo "✅ Merged PR #$PR_NUMBER as owner (sha=$sha)"
+        echo "merged=true" >> "$GITHUB_OUTPUT"
+        echo "sha=$sha" >> "$GITHUB_OUTPUT"
