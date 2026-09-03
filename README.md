@@ -51,7 +51,7 @@ jobs:
       # Pin to a commit SHA, not @v1 — this action handles a privileged
       # owner token, so treat it like any other third-party action taking
       # secrets: `git ls-remote https://github.com/LucasSantos96/merge-as-owner v1`
-      - uses: LucasSantos96/merge-as-owner@4579bde09148f72fa0686e3913e0ae4d50dbde23 # v1
+      - uses: LucasSantos96/merge-as-owner@c7d202ee81cb0b3e6a7c1588560842bf9d9420a6 # v1
         with:
           pr-number: ${{ github.event.pull_request.number }}
           pr-author: ${{ github.event.pull_request.user.login }}
@@ -81,7 +81,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: LucasSantos96/merge-as-owner@4579bde09148f72fa0686e3913e0ae4d50dbde23 # v1
+      - uses: LucasSantos96/merge-as-owner@c7d202ee81cb0b3e6a7c1588560842bf9d9420a6 # v1
         with:
           pr-number: ${{ github.event.pull_request.number }}
           pr-author: ${{ github.event.pull_request.user.login }}
@@ -111,7 +111,7 @@ jobs:
           number=$(basename "$url")
           echo "number=$number" >> "$GITHUB_OUTPUT"
 
-      - uses: LucasSantos96/merge-as-owner@4579bde09148f72fa0686e3913e0ae4d50dbde23 # v1
+      - uses: LucasSantos96/merge-as-owner@c7d202ee81cb0b3e6a7c1588560842bf9d9420a6 # v1
         with:
           pr-number: ${{ steps.pr.outputs.number }}
           pr-author: "github-actions"          # promotion PR is opened by CI itself
